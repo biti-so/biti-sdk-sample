@@ -56,7 +56,7 @@ Report is not an SDK method. Inside Biti, the customer taps **···** in the Bi
 
    | Server | Needs | Dev | Production |
    |---|---|---|---|
-   | Node | Node 24+ | `npm install && npm run dev` | `npm start` behind a reverse proxy with HTTPS |
+   | Node | Node 24+ | `npm install && npm run dev` | `npm run production` behind a reverse proxy with HTTPS (see below) |
    | PHP | PHP 8.1+ with `pdo_sqlite` and `curl` | `PHP_CLI_SERVER_WORKERS=4 php -S 0.0.0.0:8090 servers/php/router.php` | Apache: see [servers/php/README.md](servers/php/README.md) and `servers/php/apache-vhost.conf.example` |
    | Python | Python 3.10+ | `cd servers/python && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python app.py` | `.venv/bin/gunicorn -w 3 -b 127.0.0.1:8090 wsgi:app` behind nginx or Apache, see [servers/python/README.md](servers/python/README.md) |
 
@@ -67,6 +67,9 @@ Report is not an SDK method. Inside Biti, the customer taps **···** in the Bi
 Bookings, plans, top-ups, bills, webhook events and sessions are kept in SQLite (`data/daryeel.sqlite`), so a restart keeps everyone signed in. The servers share the table layout, but each signs its session cookie in its own way: after switching servers, customers sign in again.
 
 ## Production checklist
+
+`npm run production` starts the Node server with `NODE_ENV=production`. It refuses to start, and lists what to fix, when `DEV_TOOLS` is on, `COOKIE_SECURE` is not `1`, `BITI_BASE_URL`, `BITI_WALLET_URL` or `APP_ORIGINS` is not https, or `SESSION_SECRET` is shorter than 32 characters. Set `TRUST_PROXY=1` behind Apache or nginx. Keep it running with a process manager, for example `pm2 start npm --name daryeel-stays -- run production` or a systemd unit.
+
 
 - [ ] `BITI_BASE_URL` and `BITI_WALLET_URL` point to production Biti, and the Mini App is **Published** there.
 - [ ] HTTPS only. `COOKIE_SECURE=1`. `APP_ORIGINS` lists only the https origin, and the Mini App's **Allowed Origins** match it.

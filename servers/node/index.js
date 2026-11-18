@@ -30,10 +30,29 @@ const config = {
   devTools: process.env.DEV_TOOLS === "1",
   cookieSecure: process.env.COOKIE_SECURE === "1",
   dbPath: path.resolve(ROOT, process.env.DB_PATH || "data/daryeel.sqlite"),
+  trustProxy: process.env.TRUST_PROXY === "1",
+  isProduction: process.env.NODE_ENV === "production",
 };
 
 for (const key of ["clientId", "clientSecret", "sessionSecret"]) {
   if (!config[key]) throw new Error(`Missing ${key} in .env. Copy .env.example to .env and fill it in.`);
+}
+
+/** `npm run production` refuses to start with settings that are only safe on a developer machine. */
+function productionProblems() {
+  const isHttps = (url) => url.startsWith("https://");
+  return [
+    config.devTools && "DEV_TOOLS must be off",
+    !config.cookieSecure && "COOKIE_SECURE must be 1",
+    !isHttps(config.bitiBaseUrl) && "BITI_BASE_URL must be https",
+    !isHttps(config.bitiWalletUrl) && "BITI_WALLET_URL must be https",
+    (!config.appOrigins.length || !config.appOrigins.every(isHttps)) && "APP_ORIGINS must list only https origins",
+    config.sessionSecret.length < 32 && "SESSION_SECRET must be at least 32 characters",
+  ].filter(Boolean);
+}
+
+if (config.isProduction && productionProblems().length) {
+  throw new Error(`Not safe for production:\n- ${productionProblems().join("\n- ")}\nFix .env, or use npm run dev on a developer machine.`);
 }
 
 const PAGE_ROUTES = ["/", "/hotel/:id", "/checkout/:id", "/booking/:id", "/bookings", "/plan", "/deposit/:id", "/wallet", "/connect", "/dev", "/dev/bills", "/dev/webhooks"];
@@ -63,6 +82,7 @@ const biti = new BitiClient({ baseUrl: config.bitiBaseUrl, clientId: config.clie
 const app = express();
 
 app.disable("x-powered-by");
+if (config.trustProxy) app.set("trust proxy", 1);
 app.use(webhookRoutes({ store, clientSecret: config.clientSecret, log }));
 app.use(lookupRoutes({ store, clientSecret: config.clientSecret }));
 app.use(express.json({ limit: "100kb" }));

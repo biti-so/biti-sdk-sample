@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node servers/node/index.js",
     "dev": "node --watch servers/node/index.js",
+    "production": "NODE_ENV=production node servers/node/index.js",
     "smoke": "node scripts/smoke.mjs"
   },
   "engines": {

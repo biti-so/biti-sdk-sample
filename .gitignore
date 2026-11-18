@@ -4,3 +4,8 @@ node_modules/
 data/*.json
 *.log
 .DS_Store
+data/*.sqlite*
+data/store.json.imported
+__pycache__/
+*.pyc
+.venv/

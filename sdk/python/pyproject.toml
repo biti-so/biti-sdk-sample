@@ -1,0 +1,13 @@
+[project]
+name = "biti-partner"
+version = "0.1.0"
+description = "Biti partner API client"
+requires-python = ">=3.9"
+dependencies = ["requests"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["biti_partner"]

@@ -2,7 +2,7 @@
 
 Daryeel Stays is a sample partner mini app. It books hotels in Mogadishu and Hargeisa and uses every part of the Biti SDK and the Biti partner API. It runs inside the Biti app (mini browser) and in a normal web browser.
 
-The stack is Node and Express with plain HTML, CSS and JavaScript. There is no build step.
+The web app is plain HTML, CSS and JavaScript with no build step. The server comes in three versions with the same routes, JSON and SQLite data: **Node** (Express), **PHP** (Apache) and **Python** (Flask). Each one uses the partner SDK for its language in [`sdk/`](sdk/README.md). The shared rules are in [docs/server-contract.md](docs/server-contract.md).
 
 ## What it shows
 
@@ -22,7 +22,8 @@ The stack is Node and Express with plain HTML, CSS and JavaScript. There is no b
 | Connected wallet and top-up | none | `GET /api/wallet` calls `connected-wallet` and `get-topup-methods`, `POST /api/topup` calls `create-topup` (handles `needs_linking`), `GET /api/topup/:id` calls `get-topup-status` |
 | Back to Biti | `biti.close()` | none |
 | Webhooks | none | `POST /webhooks/biti` checks `X-Biti-Signature` on the raw body, skips repeated event ids, and updates bookings, deposits, plans and top-ups |
-| Developer panel | Tap **Dev**. **Page** lists each SDK and `/api` call. **Server** lists each call to Biti and each webhook. | `GET /api/dev/log` |
+| Developer pages (`DEV_TOOLS=1`) | Tap **Dev**: **SDK playground** (`/dev`) runs every SDK method and every partner endpoint; **Bills** (`/dev/bills`) is the biller side; **Webhooks** (`/dev/webhooks`); **Live log** | `GET /api/playground`, `POST /api/playground/:endpoint`, `GET /api/dev/log` |
+| Biller (Bill Provider) | Customers pay Daryeel Stays invoices from Biti's Bills page | `POST /biller/lookup` (signed) answers open bills for `DS-1001`…`DS-1003`; `/api/bills` pushes, checks and cancels bills (`billpay-*`) and approves account connects |
 
 Report is not an SDK method. Inside Biti, the customer taps **···** in the Biti bar, then **Report**.
 
@@ -36,14 +37,7 @@ Report is not an SDK method. Inside Biti, the customer taps **···** in the Bi
 
 ## Set up
 
-1. Install Node 18 or newer.
-2. Install the packages:
-
-   ```bash
-   npm install
-   ```
-
-3. Copy the settings file and fill it in:
+1. Copy the settings file and fill it in. All three servers read the same `.env` at the repo root; `.env.example` explains every key.
 
    ```bash
    cp .env.example .env
@@ -51,22 +45,48 @@ Report is not an SDK method. Inside Biti, the customer taps **···** in the Bi
 
    | Key | Value |
    |---|---|
-   | `BITI_BASE_URL` | The Biti backend, for example `http://192.168.100.200:8004`. The server calls `/partner/v1/*` here. Pages load `/assets/biti_wallet/js/biti-sdk.js` from here. |
-   | `BITI_WALLET_URL` | The Biti wallet web app, for example `http://192.168.100.200:8052`. The SDK sends web browser users here to pay or approve. |
+   | `BITI_BASE_URL` | The Biti API. Production: `https://bitiwallet.easytouch.cloud`. Dev: `http://192.168.100.119:8004`. |
+   | `BITI_WALLET_URL` | The Biti wallet web app. The SDK sends web browser users here to pay or approve. |
    | `BITI_CLIENT_ID`, `BITI_CLIENT_SECRET` | From the Mini App record. Never put them in a page or in git. |
-   | `APP_ORIGINS` | The origins of this app, separated by commas. They must also be in the Mini App's **Allowed Origins**. Biti sends the customer back only to these. |
-   | `PORT` | `8090` |
+   | `APP_ORIGINS` | The origins of this app, separated by commas. They must also be in the Mini App's **Allowed Origins**. |
    | `SESSION_SECRET` | A long random string, for example from `openssl rand -hex 32`. |
+   | `DEV_TOOLS` | `1` turns on the SDK playground and the server log. Leave it off in production. |
 
-4. Start the server:
+2. Choose a server.
 
-   ```bash
-   npm run dev
-   ```
+   | Server | Needs | Dev | Production |
+   |---|---|---|---|
+   | Node | Node 24+ | `npm install && npm run dev` | `npm start` behind a reverse proxy with HTTPS |
+   | PHP | PHP 8.1+ with `pdo_sqlite` and `curl` | `PHP_CLI_SERVER_WORKERS=4 php -S 0.0.0.0:8090 servers/php/router.php` | Apache: see [servers/php/README.md](servers/php/README.md) and `servers/php/apache-vhost.conf.example` |
+   | Python | Python 3.10+ | `cd servers/python && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python app.py` | `.venv/bin/gunicorn -w 3 -b 127.0.0.1:8090 wsgi:app` behind nginx or Apache, see [servers/python/README.md](servers/python/README.md) |
 
-5. Open http://localhost:8090.
+3. Open http://localhost:8090 and check `/api/health`: it names the server that answered.
 
-Bookings, plans and webhook events are kept in `data/store.json`. Sessions are kept in memory, so a server restart signs everyone out.
+4. Check a server with the smoke script (Node 18+ needed only to run it): `BASE=http://localhost:8090 npm run smoke`.
+
+Bookings, plans, top-ups, bills, webhook events and sessions are kept in SQLite (`data/daryeel.sqlite`), so a restart keeps everyone signed in. The servers share the table layout, but each signs its session cookie in its own way: after switching servers, customers sign in again.
+
+## Production checklist
+
+- [ ] `BITI_BASE_URL` and `BITI_WALLET_URL` point to production Biti, and the Mini App is **Published** there.
+- [ ] HTTPS only. `COOKIE_SECURE=1`. `APP_ORIGINS` lists only the https origin, and the Mini App's **Allowed Origins** match it.
+- [ ] `DEV_TOOLS` is off.
+- [ ] `.env` and `data/` are outside the web root (Apache) and not in git.
+- [ ] The Mini App's **Webhook URL** is `https://<your host>/webhooks/biti`; the server answers 2xx within 10 seconds.
+- [ ] As a biller, the Bill Provider's lookup URL is `https://<your host>/biller/lookup`.
+- [ ] Behind a reverse proxy: forward the host and scheme (`TRUST_PROXY=1` for Python) so return URLs match `APP_ORIGINS`.
+- [ ] Back up `data/daryeel.sqlite`.
+
+## Run mode
+
+Set `RUN_MODE` in `.env`:
+
+| Value | What happens |
+|---|---|
+| `anywhere` (default) | The app works inside the Biti mini browser and in a normal browser. In a normal browser, payments open the Biti web pages and come back. |
+| `biti_only` | The app works only inside the Biti mini browser. A normal browser shows "Open Daryeel Stays in Biti" with an **Open in Biti** link (`biti://miniapp/<BITI_APP_ID>`). |
+
+`BITI_APP_ID` is the Mini App id in Biti Desk (default `daryeel-stays`). The gate is in the page only. The server still checks every call, so `biti_only` is a product choice, not a security control.
 
 ## Register the app in Biti Desk
 
@@ -109,14 +129,11 @@ The plan and the deposit use the same flow with `/pay/mandate/<id>` and `/pay/ho
 
 | Path | What it holds |
 |---|---|
-| `server/index.js` | Express app, settings, `/config.js`, health check, error answers |
-| `server/biti.js` | Biti API client (credential headers, envelope, call log) and the webhook signature check |
-| `server/routes/account.js` | Sign-in, Connect, wallet and top-up routes |
-| `server/routes/bookings.js` | Bookings, payment checks, refunds and deposit holds |
-| `server/routes/plan.js` | Monthly stay plan (mandate) |
-| `server/routes/webhooks.js` | Webhook endpoint |
-| `server/catalog.js` | Hotels and prices |
-| `server/session.js`, `server/store.js` | Session cookie and the JSON store |
-| `public/index.html`, `public/styles.css` | Page shell and styles |
-| `public/js/client.js` | Calls to this server, SDK loader and wrapper, call log |
-| `public/js/views.js`, `public/js/main.js`, `public/js/ui.js` | Screens, router, developer panel and helpers |
+| `sdk/node`, `sdk/php`, `sdk/python` | Partner API client for each language: every endpoint, credential headers, errors, webhook and lookup signature checks |
+| `sdk/js/biti-browser.js` | Browser helper around the Biti mini browser SDK |
+| `servers/node` | Express server: `index.js`, `store.js` (SQLite), `session.js`, `catalog.js`, `routes/` |
+| `servers/php` | PHP server: `public/index.php` + `.htaccess` (Apache), `router.php` (built-in server), `src/` |
+| `servers/python` | Flask server: `app.py`, `wsgi.py`, `store.py`, `session.py`, `routes/` |
+| `public/` | The web app shared by all servers: `index.html`, `styles.css`, `js/` (screens, router, SDK wrapper, developer pages in `devViews.js`) |
+| `scripts/smoke.mjs` | Smoke test for any running server |
+| `docs/server-contract.md` | Routes, storage and SDK interface every server follows |

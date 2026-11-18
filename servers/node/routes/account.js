@@ -1,7 +1,7 @@
 const express = require("express");
 
 const { CURRENCY } = require("../catalog");
-const { signIn, signOut, isSignedIn, requireUser } = require("../session");
+const { signIn, signOut, isSignedIn, ownerOf, requireUser } = require("../session");
 
 const LOGIN_SCOPES = ["profile.read", "wallet.read", "wallet.topup"];
 const REFERENCE_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -23,7 +23,7 @@ function accountRoutes({ biti, store }) {
       const code = String(req.body.code || "");
       if (!code) return res.status(400).json({ error: "code is required" });
       const data = await biti.call("exchange-login-code", { code });
-      signIn(req.session, data, "mini_browser");
+      signIn(req, data, "mini_browser");
       res.json(publicUser(req.session));
     } catch (error) {
       next(error);
@@ -31,7 +31,7 @@ function accountRoutes({ biti, store }) {
   });
 
   router.post("/logout", (req, res) => {
-    signOut(req.session);
+    signOut(req);
     res.json({ signed_in: false });
   });
 
@@ -50,7 +50,7 @@ function accountRoutes({ biti, store }) {
   router.get("/connect/:token", async (req, res, next) => {
     try {
       const data = await biti.call("connect-status", { request_token: req.params.token });
-      if (data.access_token) signIn(req.session, data, "connect");
+      if (data.access_token) signIn(req, data, "connect");
       res.json({ status: data.status, account_exists: data.account_exists, expires_in: data.expires_in, me: publicUser(req.session) });
     } catch (error) {
       next(error);
@@ -81,8 +81,7 @@ function accountRoutes({ biti, store }) {
         { method_id: methodId, amount, currency: req.body.currency || CURRENCY, reference },
         { token: req.session.token }
       );
-      store.topups[data.topup_id] = { ...data, reference, created_at: new Date().toISOString() };
-      store.save();
+      store.put("topup", data.topup_id, { ...data, reference, created_at: new Date().toISOString() }, ownerOf(req.session));
       res.json(data);
     } catch (error) {
       if (error.code === "needs_linking") return res.status(409).json({ error: error.message, code: error.code, link_url: error.data?.link_url });
@@ -93,8 +92,7 @@ function accountRoutes({ biti, store }) {
   router.get("/topup/:id", requireUser, async (req, res, next) => {
     try {
       const data = await biti.call("get-topup-status", { topup_id: req.params.id }, { token: req.session.token });
-      if (store.topups[req.params.id]) Object.assign(store.topups[req.params.id], data);
-      store.save();
+      if (store.get("topup", req.params.id)) store.update("topup", req.params.id, (topup) => Object.assign(topup, data));
       res.json(data);
     } catch (error) {
       next(error);

@@ -1,8 +1,14 @@
 import { api, devLog, explain, isInBiti, loadSdk, onLog, sdk } from "./client.js";
-import { alertBox, app, closeSheet, esc, nextFriday } from "./ui.js";
-import { views } from "./views.js";
+import { devViews } from "./devViews.js";
+import { alertBox, app, closeSheet, config, esc, nextFriday, openSheet } from "./ui.js";
+import { views as appViews } from "./views.js";
+
+const views = { ...appViews, ...devViews };
 
 const ROUTES = [
+  ["/dev", "dev"],
+  ["/dev/bills", "devBills"],
+  ["/dev/webhooks", "devWebhooks"],
   ["/", "home"],
   ["/hotel/:id", "hotel"],
   ["/checkout/:id", "checkout"],
@@ -101,8 +107,20 @@ async function renderServerLog() {
 function setupDevPanel() {
   const panel = document.getElementById("dev");
   document.getElementById("dev-toggle").addEventListener("click", () => {
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) renderDevLog();
+    if (!panel.hidden) {
+      panel.hidden = true;
+      return;
+    }
+    openSheet(`<h3>Developer</h3>
+      <button class="row" data-go="/dev"><span class="tx"><b>SDK playground</b><small>Try every SDK method and Partner API call</small></span><span class="go">›</span></button>
+      <button class="row" data-go="/dev/bills"><span class="tx"><b>Bills (biller side)</b><small>Push bills and answer connect requests</small></span><span class="go">›</span></button>
+      <button class="row" data-go="/dev/webhooks"><span class="tx"><b>Webhooks</b><small>Events from Biti and server calls</small></span><span class="go">›</span></button>
+      <button class="row" id="dev-open-log"><span class="tx"><b>Live log</b><small>Calls made by this page</small></span><span class="go">›</span></button>`);
+    document.getElementById("dev-open-log").addEventListener("click", () => {
+      closeSheet();
+      panel.hidden = false;
+      renderDevLog();
+    });
   });
   document.getElementById("dev-close").addEventListener("click", () => { panel.hidden = true; });
   panel.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
@@ -115,13 +133,37 @@ function setupDevPanel() {
   onLog(() => { if (!panel.hidden) renderDevLog(); });
 }
 
+// RUN_MODE=biti_only: the app runs only inside the Biti mini browser; a normal browser gets this screen.
+function openInBitiGate() {
+  const deepLink = `biti://miniapp/${encodeURIComponent(config.appId)}`;
+  return `
+    <div class="gate">
+      <span class="gate-ic">D</span>
+      <h1>Open Daryeel Stays in Biti</h1>
+      <p class="muted">This app runs inside the Biti app, so you can sign in and pay with your Biti wallet.</p>
+      <a class="btn" href="${esc(deepLink)}">Open in Biti</a>
+      <ol class="gate-steps muted small">
+        <li>Open the Biti app on your phone.</li>
+        <li>Go to <b>Services</b>.</li>
+        <li>Tap <b>Daryeel Stays</b>.</li>
+      </ol>
+    </div>`;
+}
+
 async function boot() {
   app.navigate = navigate;
   app.render = render;
   app.search = loadSearch();
   setupDevPanel();
 
-  const [hotels, me] = await Promise.all([api("GET", "/hotels"), api("GET", "/me"), loadSdk()]);
+  await loadSdk();
+  if (config.runMode === "biti_only" && !isInBiti()) {
+    document.getElementById("env").textContent = "Web";
+    document.getElementById("view").innerHTML = openInBitiGate();
+    return;
+  }
+
+  const [hotels, me] = await Promise.all([api("GET", "/hotels"), api("GET", "/me")]);
   app.hotels = hotels;
   app.me = me;
   document.documentElement.dataset.env = isInBiti() ? "biti" : "web";

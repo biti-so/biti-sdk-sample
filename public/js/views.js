@@ -49,7 +49,7 @@ async function payBooking(booking) {
   app.navigate(`/booking/${booking.id}`);
 }
 
-function bindClick(root, selector, handler) {
+export function bindClick(root, selector, handler) {
   root.querySelectorAll(selector).forEach((node) => {
     node.addEventListener("click", async (event) => {
       const button = event.currentTarget;

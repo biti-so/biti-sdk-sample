@@ -37,13 +37,13 @@ function bookingRoutes({ biti, store, returnUrl }) {
   const router = express.Router();
 
   function ownBooking(req) {
-    const booking = store.bookings[req.params.id || req.body.booking_id];
+    const booking = store.get("booking", req.params.id || req.body.booking_id);
     return booking && booking.owner === ownerOf(req.session) ? booking : null;
   }
 
   async function startPayment(req, booking) {
-    booking.attempts += 1;
-    const reference = `${booking.id}-P${booking.attempts}`;
+    const { attempts } = store.update("booking", booking.id, (current) => { current.attempts += 1; });
+    const reference = `${booking.id}-P${attempts}`;
     const order = await biti.call("create-order", {
       amount: booking.quote.total,
       currency: booking.quote.currency,
@@ -51,42 +51,42 @@ function bookingRoutes({ biti, store, returnUrl }) {
       description: `${booking.hotel_name} · ${booking.nights} night${booking.nights > 1 ? "s" : ""} from ${booking.check_in}`,
       return_url: returnUrl(req, `/booking/${booking.id}`),
     });
-    booking.order = { ...order, reference };
-    booking.status = "awaiting_payment";
-    store.save();
+    return store.update("booking", booking.id, (current) => {
+      current.order = { ...order, reference };
+      current.status = "awaiting_payment";
+    });
   }
 
   /** Only Biti's answer confirms a booking, never the page. */
   async function syncOrder(booking) {
-    if (!booking.order || booking.status === "cancelled") return;
+    if (!booking.order || booking.status === "cancelled") return booking;
     const order = await biti.call("get-order-status", { order_id: booking.order.order_id });
-    booking.order.status = order.status;
-    if (order.status === "paid" || order.status === "partially_refunded") {
-      Object.assign(booking, { status: "confirmed", transaction_id: order.transaction_id, paid_at: order.paid_at });
-    }
-    if (order.status === "refunded") booking.status = "cancelled";
-    if (RETRYABLE_ORDER.has(order.status) && booking.status === "awaiting_payment") booking.status = "payment_" + order.status;
-    store.save();
+    return store.update("booking", booking.id, (current) => {
+      current.order.status = order.status;
+      if (order.status === "paid" || order.status === "partially_refunded") {
+        Object.assign(current, { status: "confirmed", transaction_id: order.transaction_id, paid_at: order.paid_at });
+      }
+      if (order.status === "refunded") current.status = "cancelled";
+      if (RETRYABLE_ORDER.has(order.status) && current.status === "awaiting_payment") current.status = "payment_" + order.status;
+    });
   }
 
   router.all(["/bookings", "/bookings/*", "/deposit", "/deposit/*"], requireUser);
 
   router.get("/bookings", (req, res) => {
-    const owner = ownerOf(req.session);
-    const list = Object.values(store.bookings).filter((booking) => booking.owner === owner);
-    res.json(list.sort((a, b) => b.created_at.localeCompare(a.created_at)));
+    res.json(store.list("booking", ownerOf(req.session)));
   });
 
   router.post("/bookings", async (req, res, next) => {
     try {
       const key = req.get("Idempotency-Key");
-      const earlier = store.getIdempotent(key);
-      if (earlier) return res.json(store.bookings[earlier]);
+      const earlier = store.get("idempotency", key);
+      if (key && earlier) return res.json(store.get("booking", earlier.booking_id));
 
       const stay = parseStay(req.body);
       if (stay.error) return res.status(400).json({ error: stay.error });
       const booking = {
-        id: store.newBookingId(),
+        id: `BK-${store.nextNumber("booking", 2041)}`,
         owner: ownerOf(req.session),
         guest: req.session.user,
         hotel_id: stay.hotel.id,
@@ -101,10 +101,11 @@ function bookingRoutes({ biti, store, returnUrl }) {
         attempts: 0,
         created_at: new Date().toISOString(),
       };
-      store.bookings[booking.id] = booking;
-      store.putIdempotent(key, booking.id);
-      await startPayment(req, booking);
-      res.status(201).json(booking);
+      store.transaction(() => {
+        store.put("booking", booking.id, booking, booking.owner);
+        if (key) store.put("idempotency", key, { booking_id: booking.id });
+      });
+      res.status(201).json(await startPayment(req, booking));
     } catch (error) {
       next(error);
     }
@@ -114,8 +115,8 @@ function bookingRoutes({ biti, store, returnUrl }) {
     try {
       const booking = ownBooking(req);
       if (!booking) return res.status(404).json({ error: "Booking not found" });
-      await syncOrder(booking);
-      res.json({ ...booking, cancel_until: cancelDeadline(booking).toISOString() });
+      const synced = await syncOrder(booking);
+      res.json({ ...synced, cancel_until: cancelDeadline(synced).toISOString() });
     } catch (error) {
       next(error);
     }
@@ -126,10 +127,10 @@ function bookingRoutes({ biti, store, returnUrl }) {
     try {
       const booking = ownBooking(req);
       if (!booking) return res.status(404).json({ error: "Booking not found" });
-      await syncOrder(booking);
-      if (booking.status === "confirmed") return res.json(booking);
-      if (!booking.order || RETRYABLE_ORDER.has(booking.order.status)) await startPayment(req, booking);
-      res.json(booking);
+      const synced = await syncOrder(booking);
+      if (synced.status === "confirmed") return res.json(synced);
+      const retry = !synced.order || RETRYABLE_ORDER.has(synced.order.status);
+      res.json(retry ? await startPayment(req, synced) : synced);
     } catch (error) {
       next(error);
     }
@@ -147,12 +148,11 @@ function bookingRoutes({ biti, store, returnUrl }) {
         reason: "Guest cancelled the booking",
         reference: `${booking.id}-refund`,
       });
-      Object.assign(booking, { status: "cancelled", refund, cancelled_at: new Date().toISOString() });
-      if (booking.deposit?.status === "held") {
-        booking.deposit = { ...booking.deposit, ...(await biti.call("release-hold", { hold_id: booking.deposit.hold_id })) };
-      }
-      store.save();
-      res.json(booking);
+      const released = booking.deposit?.status === "held" ? await biti.call("release-hold", { hold_id: booking.deposit.hold_id }) : null;
+      res.json(store.update("booking", booking.id, (current) => {
+        Object.assign(current, { status: "cancelled", refund, cancelled_at: new Date().toISOString() });
+        if (released) current.deposit = { ...current.deposit, ...released };
+      }));
     } catch (error) {
       next(error);
     }
@@ -175,9 +175,10 @@ function bookingRoutes({ biti, store, returnUrl }) {
         description: `Room deposit · ${booking.hotel_name} · ${booking.id}`,
         return_url: returnUrl(req, `/booking/${booking.id}`),
       });
-      booking.deposit = { ...hold, amount: DEPOSIT_AMOUNT, release_by: releaseBy.toISOString() };
-      store.save();
-      res.json(booking.deposit);
+      const updated = store.update("booking", booking.id, (current) => {
+        current.deposit = { ...hold, amount: DEPOSIT_AMOUNT, release_by: releaseBy.toISOString() };
+      });
+      res.json(updated.deposit);
     } catch (error) {
       next(error);
     }
@@ -185,16 +186,15 @@ function bookingRoutes({ biti, store, returnUrl }) {
 
   function depositBooking(req) {
     const owner = ownerOf(req.session);
-    return store.findBooking((booking) => booking.owner === owner && booking.deposit?.hold_id === req.params.holdId);
+    return store.list("booking", owner).find((booking) => booking.deposit?.hold_id === req.params.holdId) || null;
   }
 
   router.get("/deposit/:holdId", async (req, res, next) => {
     try {
       const booking = depositBooking(req);
       if (!booking) return res.status(404).json({ error: "Deposit not found" });
-      Object.assign(booking.deposit, await biti.call("get-hold-status", { hold_id: req.params.holdId }));
-      store.save();
-      res.json(booking.deposit);
+      const hold = await biti.call("get-hold-status", { hold_id: req.params.holdId });
+      res.json(store.update("booking", booking.id, (current) => Object.assign(current.deposit, hold)).deposit);
     } catch (error) {
       next(error);
     }
@@ -208,9 +208,8 @@ function bookingRoutes({ biti, store, returnUrl }) {
         if (!booking) return res.status(404).json({ error: "Deposit not found" });
         const body = { hold_id: req.params.holdId };
         if (action === "capture" && req.body.amount) body.amount = Number(req.body.amount);
-        Object.assign(booking.deposit, await biti.call(`${action}-hold`, body));
-        store.save();
-        res.json(booking.deposit);
+        const hold = await biti.call(`${action}-hold`, body);
+        res.json(store.update("booking", booking.id, (current) => Object.assign(current.deposit, hold)).deposit);
       } catch (error) {
         next(error);
       }

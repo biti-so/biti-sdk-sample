@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "description": "Sample Biti partner mini app: hotel booking with the full Biti SDK and partner API.",
-  "main": "server/index.js",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "start": "node servers/node/index.js",
+    "dev": "node --watch servers/node/index.js",
+    "smoke": "node scripts/smoke.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

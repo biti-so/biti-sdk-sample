@@ -100,7 +100,8 @@ export function sleep(ms) {
 }
 
 export function statusPill(status) {
-  const tone = { confirmed: "g", active: "g", held: "g", done: "g", paid: "g", cancelled: "n", released: "n", captured: "a", awaiting_payment: "a", pending: "a" }[status] || "r";
+  const key = String(status || "").toLowerCase().replace(/ /g, "_");
+  const tone = { confirmed: "g", active: "g", held: "g", done: "g", paid: "g", cancelled: "n", released: "n", captured: "a", awaiting_payment: "a", pending: "a", open: "a", part_paid: "a" }[key] || "r";
   const text = String(status || "unknown").replace(/_/g, " ");
   return `<span class="pill ${tone}">${esc(text[0].toUpperCase() + text.slice(1))}</span>`;
 }

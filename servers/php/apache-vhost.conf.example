@@ -1,0 +1,33 @@
+# Daryeel Stays (PHP) behind Apache 2.4 with mod_rewrite and PHP (mod_php or php-fpm via SetHandler).
+# Replace /srv/biti-sdk-sample with the repo path and stays.example.com with your host.
+#
+# DocumentRoot is the shared public/ folder, so Apache serves styles.css and js/ itself.
+# The API, config.js, the webhooks and the page routes go to servers/php/public/index.php.
+# .env, data/, servers/ and sdk/ sit outside DocumentRoot, so they are never served.
+
+<VirtualHost *:80>
+    ServerName stays.example.com
+    DocumentRoot /srv/biti-sdk-sample/public
+
+    Alias /_php /srv/biti-sdk-sample/servers/php/public
+    <Directory /srv/biti-sdk-sample/servers/php/public>
+        Require all granted
+        Options -Indexes
+    </Directory>
+
+    <Directory /srv/biti-sdk-sample/public>
+        Require all granted
+        Options -Indexes
+    </Directory>
+
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/_php/
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} !-f
+    RewriteRule ^ /_php/index.php [PT,L]
+</VirtualHost>
+
+# HTTPS: terminate TLS here (certbot) and set COOKIE_SECURE=1 in .env.

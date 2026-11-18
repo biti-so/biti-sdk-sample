@@ -1,14 +1,17 @@
 const path = require("path");
 
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const ROOT = path.join(__dirname, "..", "..");
+require("dotenv").config({ path: path.join(ROOT, ".env") });
 
 const cookieParser = require("cookie-parser");
 const express = require("express");
 
-const { BitiError, createBitiClient } = require("./biti");
+const { BitiClient, BitiError } = require("../../sdk/node");
 const catalog = require("./catalog");
 const { accountRoutes, LOGIN_SCOPES } = require("./routes/account");
+const { billRoutes, lookupRoutes, seedAccounts } = require("./routes/bills");
 const { bookingRoutes } = require("./routes/bookings");
+const { devRoutes } = require("./routes/dev");
 const { planRoutes } = require("./routes/plan");
 const { webhookRoutes } = require("./routes/webhooks");
 const { sessionMiddleware } = require("./session");
@@ -21,14 +24,19 @@ const config = {
   clientSecret: process.env.BITI_CLIENT_SECRET,
   appOrigins: (process.env.APP_ORIGINS || "").split(",").map((origin) => origin.trim().replace(/\/+$/, "")).filter(Boolean),
   port: Number(process.env.PORT || 8090),
+  runMode: process.env.RUN_MODE === "biti_only" ? "biti_only" : "anywhere",
+  appId: process.env.BITI_APP_ID || "daryeel-stays",
   sessionSecret: process.env.SESSION_SECRET,
+  devTools: process.env.DEV_TOOLS === "1",
+  cookieSecure: process.env.COOKIE_SECURE === "1",
+  dbPath: path.resolve(ROOT, process.env.DB_PATH || "data/daryeel.sqlite"),
 };
 
 for (const key of ["clientId", "clientSecret", "sessionSecret"]) {
   if (!config[key]) throw new Error(`Missing ${key} in .env. Copy .env.example to .env and fill it in.`);
 }
 
-const PAGE_ROUTES = ["/", "/hotel/:id", "/checkout/:id", "/booking/:id", "/bookings", "/plan", "/deposit/:id", "/wallet", "/connect"];
+const PAGE_ROUTES = ["/", "/hotel/:id", "/checkout/:id", "/booking/:id", "/bookings", "/plan", "/deposit/:id", "/wallet", "/connect", "/dev", "/dev/bills", "/dev/webhooks"];
 const serverCalls = [];
 
 function log(...parts) {
@@ -47,12 +55,16 @@ function returnUrl(req, pagePath) {
   return config.appOrigins.includes(origin) ? `${origin}${pagePath}` : undefined;
 }
 
-const store = new Store();
-const biti = createBitiClient({ baseUrl: config.bitiBaseUrl, clientId: config.clientId, clientSecret: config.clientSecret, trace });
+const store = new Store(config.dbPath);
+if (store.importLegacy(path.join(ROOT, "data", "store.json"))) log("imported data/store.json into SQLite");
+seedAccounts(store);
+
+const biti = new BitiClient({ baseUrl: config.bitiBaseUrl, clientId: config.clientId, clientSecret: config.clientSecret, onTrace: trace });
 const app = express();
 
 app.disable("x-powered-by");
 app.use(webhookRoutes({ store, clientSecret: config.clientSecret, log }));
+app.use(lookupRoutes({ store, clientSecret: config.clientSecret }));
 app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser(config.sessionSecret));
 
@@ -60,17 +72,20 @@ app.get("/config.js", (req, res) => {
   const pageConfig = {
     sdkUrl: `${config.bitiBaseUrl}/assets/biti_wallet/js/biti-sdk.js`,
     bitiOrigin: config.bitiWalletUrl,
+    runMode: config.runMode,
+    appId: config.appId,
     loginScopes: LOGIN_SCOPES,
     currency: catalog.CURRENCY,
     cityTaxPerNight: catalog.CITY_TAX_PER_NIGHT,
     depositAmount: catalog.DEPOSIT_AMOUNT,
     planLimit: catalog.PLAN_LIMIT,
+    devTools: config.devTools,
   };
   res.type("application/javascript").set("Cache-Control", "no-store").send(`window.APP_CONFIG = ${JSON.stringify(pageConfig)};`);
 });
 
-app.use(express.static(path.join(__dirname, "..", "public"), { index: false }));
-app.use(sessionMiddleware);
+app.use(express.static(path.join(ROOT, "public"), { index: false }));
+app.use(sessionMiddleware({ store, secure: config.cookieSecure }));
 
 const api = express.Router();
 api.get("/health", async (req, res) => {
@@ -78,16 +93,18 @@ api.get("/health", async (req, res) => {
   const ping = await fetch(`${config.bitiBaseUrl}/api/method/ping`, { signal: AbortSignal.timeout(5000) })
     .then((response) => response.ok)
     .catch(() => false);
-  res.json({ ok: true, biti_reachable: ping, biti_base_url: config.bitiBaseUrl, ms: Date.now() - started });
+  res.json({ ok: true, biti_reachable: ping, biti_base_url: config.bitiBaseUrl, ms: Date.now() - started, server: "node" });
 });
 api.get("/hotels", (req, res) => res.json(catalog.HOTELS));
-api.get("/dev/log", (req, res) => res.json({ server_calls: serverCalls, webhooks: store.data.events.slice(0, 20) }));
+if (config.devTools) api.use(devRoutes({ biti, store, serverCalls }));
+else api.all(["/dev/*", "/playground", "/playground/*"], (req, res) => res.status(404).json({ error: "Dev tools are off", code: "dev_tools_off" }));
 api.use(accountRoutes({ biti, store }));
 api.use(bookingRoutes({ biti, store, returnUrl }));
 api.use(planRoutes({ biti, store, returnUrl }));
+api.use(billRoutes({ biti, store }));
 app.use("/api", api);
 
-app.get(PAGE_ROUTES, (req, res) => res.sendFile(path.join(__dirname, "..", "public", "index.html")));
+app.get(PAGE_ROUTES, (req, res) => res.sendFile(path.join(ROOT, "public", "index.html")));
 
 app.use((error, req, res, next) => {
   if (error instanceof BitiError) {
@@ -99,5 +116,5 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(config.port, "0.0.0.0", () => {
-  log(`Daryeel Stays on http://localhost:${config.port} (Biti: ${config.bitiBaseUrl})`);
+  log(`Daryeel Stays (node) on http://localhost:${config.port} (Biti: ${config.bitiBaseUrl})`);
 });

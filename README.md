@@ -140,3 +140,7 @@ The plan and the deposit use the same flow with `/pay/mandate/<id>` and `/pay/ho
 | `public/` | The web app shared by all servers: `index.html`, `styles.css`, `js/` (screens, router, SDK wrapper, developer pages in `devViews.js`) |
 | `scripts/smoke.mjs` | Smoke test for any running server |
 | `docs/server-contract.md` | Routes, storage and SDK interface every server follows |
+
+---
+
+<p align="center">Powered by <a href="https://yool.tech">Yooltech</a></p>
